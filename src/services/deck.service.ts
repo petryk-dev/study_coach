@@ -2,6 +2,8 @@ import prisma from './db';
 import { generateCards, generateSummary } from './cardGen';
 import { HttpError } from '../utils/httpError';
 import { logError } from '../utils/logger';
+import { todayInAppTz } from '../utils/date';
+import { dueFilter, masteredFilter } from './cardFilters';
 import type { CreateDeckInput } from '../schemas/deck.schema';
 
 // First line of the notes, shortened, when the user didn't give a title.
@@ -30,19 +32,58 @@ export async function createDeck(userId: number, { title, text }: CreateDeckInpu
       title: title ?? titleFromText(text),
       source_text: text,
       summary,
-      cards: { create: cards },
+      // Due today in the app timezone (the column default uses the database's UTC date)
+      cards: { create: cards.map((card) => ({ ...card, due_date: todayInAppTz() })) },
     },
     include: { cards: { orderBy: { id: 'asc' } } },
   });
 }
 
+/** The user's decks with card and due counts (for the "12 due" badge on Home). */
 export async function listDecks(userId: number) {
-  const decks = await prisma.decks.findMany({
-    where: { user_id: userId },
-    orderBy: { created_at: 'desc' },
-    select: { id: true, title: true, summary: true, created_at: true, _count: { select: { cards: true } } },
-  });
-  return decks.map(({ _count, ...deck }) => ({ ...deck, card_count: _count.cards }));
+  const [decks, due] = await Promise.all([
+    prisma.decks.findMany({
+      where: { user_id: userId },
+      orderBy: { created_at: 'desc' },
+      select: { id: true, title: true, summary: true, created_at: true, _count: { select: { cards: true } } },
+    }),
+    // _count can't count the same relation twice with different filters,
+    // so due counts for all decks come from one grouped query
+    prisma.cards.groupBy({
+      by: ['deck_id'],
+      where: { decks: { user_id: userId }, ...dueFilter() },
+      _count: { _all: true },
+    }),
+  ]);
+
+  const dueByDeck = new Map(due.map((d) => [d.deck_id, d._count._all]));
+  return decks.map(({ _count, ...deck }) => ({
+    ...deck,
+    card_count: _count.cards,
+    dueCount: dueByDeck.get(deck.id) ?? 0,
+  }));
+}
+
+/** Numbers for the Deck screen: Due today / Mastered / Last quiz. */
+async function getDeckStats(userId: number, deckId: number, total: number) {
+  const [due, mastered, lastAttempt] = await Promise.all([
+    prisma.cards.count({ where: { deck_id: deckId, ...dueFilter() } }),
+    prisma.cards.count({ where: { deck_id: deckId, ...masteredFilter } }),
+    prisma.quiz_attempts.findFirst({
+      where: { user_id: userId, quizzes: { deck_id: deckId } },
+      orderBy: { created_at: 'desc' },
+      select: { score: true, total: true },
+    }),
+  ]);
+
+  return {
+    total,
+    due,
+    mastered,
+    // null until the first quiz; the app shows "—"
+    lastQuizPercent:
+      lastAttempt && lastAttempt.total > 0 ? Math.round((lastAttempt.score / lastAttempt.total) * 100) : null,
+  };
 }
 
 export async function getDeck(userId: number, deckId: number) {
@@ -51,7 +92,7 @@ export async function getDeck(userId: number, deckId: number) {
     include: { cards: { orderBy: { id: 'asc' } } },
   });
   if (!deck) throw new HttpError(404, 'Deck not found', 'NOT_FOUND');
-  return deck;
+  return { deck, stats: await getDeckStats(userId, deckId, deck.cards.length) };
 }
 
 export async function deleteDeck(userId: number, deckId: number): Promise<void> {

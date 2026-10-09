@@ -6,6 +6,9 @@ import { requestLogger } from './middlewares/requestLogger';
 import { errorHandler } from './middlewares/errorHandler';
 import authRoutes from './routes/auth.routes';
 import deckRoutes from './routes/deck.routes';
+import reviewRoutes from './routes/review.routes';
+import quizRoutes from './routes/quiz.routes';
+import cardRoutes from './routes/card.routes';
 import { openApiSpec } from './docs/openapi';
 import { log } from './utils/logger';
 
@@ -26,6 +29,9 @@ app.get('/health', (_req, res) => {
 
 app.use('/auth', authRoutes);
 app.use('/decks', deckRoutes);
+app.use('/review', reviewRoutes);
+app.use('/quiz', quizRoutes);
+app.use('/cards', cardRoutes);
 
 // API docs: Swagger UI at /docs, raw OpenAPI spec at /docs.json
 app.get('/docs.json', (_req, res) => {

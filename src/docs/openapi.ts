@@ -9,6 +9,9 @@ import {
   verifyEmailSchema,
 } from '../schemas/auth.schema';
 import { createDeckSchema, NOTES_MAX_CHARS } from '../schemas/deck.schema';
+import { reviewSchema } from '../schemas/review.schema';
+import { submitQuizSchema } from '../schemas/quiz.schema';
+import { updateCardSchema } from '../schemas/card.schema';
 
 // Request bodies come straight from the zod schemas the routes validate with,
 // so the docs can't drift from what the API actually accepts.
@@ -53,7 +56,7 @@ export const openApiSpec = {
       'Each refresh token works once; reusing one logs out every session of that user.',
   },
   servers: [{ url: '/', description: 'This server' }],
-  tags: [{ name: 'Health' }, { name: 'Auth' }, { name: 'Password reset' }, { name: 'Decks', description: 'Flashcard decks generated from notes. All routes need a Bearer token.' }],
+  tags: [{ name: 'Health' }, { name: 'Auth' }, { name: 'Password reset' }, { name: 'Decks', description: 'Flashcard decks generated from notes. All routes need a Bearer token.' }, { name: 'Review', description: 'Spaced repetition (SM-2). All routes need a Bearer token.' }, { name: 'Quiz', description: 'Multiple-choice quizzes generated from a deck. All routes need a Bearer token.' }, { name: 'Cards', description: 'Single-card actions. All routes need a Bearer token.' }],
   components: {
     securitySchemes: {
       bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
@@ -94,7 +97,9 @@ export const openApiSpec = {
           interval: { type: ['integer', 'null'], example: 0 },
           repetitions: { type: ['integer', 'null'], example: 0 },
           lapses: { type: ['integer', 'null'], example: 0 },
-          due_date: { type: ['string', 'null'], format: 'date-time' },
+          due_date: { type: ['string', 'null'], format: 'date-time', description: 'Date only; the time part is always 00:00:00Z' },
+          explanation: { type: ['string', 'null'], description: 'Cached "Explain this simply" text, if generated' },
+          explanation_example: { type: ['string', 'null'], description: 'Cached example for the explanation' },
           created_at: { type: ['string', 'null'], format: 'date-time' },
         },
       },
@@ -117,7 +122,30 @@ export const openApiSpec = {
           title: { type: 'string', example: 'Photosynthesis' },
           summary: { type: ['string', 'null'] },
           created_at: { type: ['string', 'null'], format: 'date-time' },
-          card_count: { type: 'integer', example: 8 },
+          card_count: { type: 'integer', example: 48 },
+          dueCount: { type: 'integer', example: 12, description: 'Cards due today or earlier (Europe/Prague)' },
+        },
+      },
+      DeckStats: {
+        type: 'object',
+        properties: {
+          total: { type: 'integer', example: 48 },
+          due: { type: 'integer', example: 12, description: 'Cards due today or earlier (Europe/Prague)' },
+          mastered: { type: 'integer', example: 31, description: 'Cards with an interval of 21+ days' },
+          lastQuizPercent: {
+            type: ['integer', 'null'],
+            example: 78,
+            description: 'Score of the newest quiz attempt on this deck, null if no quizzes yet',
+          },
+        },
+      },
+      DueCard: {
+        type: 'object',
+        properties: {
+          id: { type: 'integer', example: 12 },
+          front: { type: 'string', example: 'Where does the Calvin cycle occur?' },
+          back: { type: 'string', example: 'In the stroma.' },
+          deck_id: { type: 'integer', example: 1 },
         },
       },
       Error: {
@@ -298,7 +326,7 @@ export const openApiSpec = {
       get: {
         tags: ['Decks'],
         summary: "List the user's decks",
-        description: 'Newest first. Cards are not included; use GET /decks/{id} for those.',
+        description: 'Newest first, with `dueCount` per deck for the Home badge. Cards are not included; use GET /decks/{id} for those.',
         security: [{ bearerAuth: [] }],
         responses: {
           200: json({ type: 'object', properties: { decks: { type: 'array', items: ref('DeckListItem') } } }, 'Decks'),
@@ -309,11 +337,12 @@ export const openApiSpec = {
     '/decks/{id}': {
       get: {
         tags: ['Decks'],
-        summary: 'Get a deck with its cards',
+        summary: 'Get a deck with its cards and stats',
+        description: 'Includes `stats` for the Deck screen: total, due today, mastered (interval of 21+ days) and the last quiz score.',
         security: [{ bearerAuth: [] }],
         parameters: DECK_ID_PARAM,
         responses: {
-          200: json({ type: 'object', properties: { deck: ref('Deck') } }, 'The deck'),
+          200: json({ type: 'object', properties: { deck: ref('Deck'), stats: ref('DeckStats') } }, 'The deck with its stats'),
           400: json(ref('Error'), 'Invalid deck id (`VALIDATION_ERROR`)'),
           401: errors.unauthorized,
           404: errors.deckNotFound,
@@ -329,6 +358,202 @@ export const openApiSpec = {
           400: json(ref('Error'), 'Invalid deck id (`VALIDATION_ERROR`)'),
           401: errors.unauthorized,
           404: errors.deckNotFound,
+        },
+      },
+    },
+    '/review/due': {
+      get: {
+        tags: ['Review'],
+        summary: 'Cards to study today',
+        description:
+          "Cards due today or earlier from the user's decks, oldest first, at most 20. Today means today in Europe/Prague. " +
+          'Without `deckId`, returns due cards from all decks (used by "Continue session" on Home).',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'deckId', in: 'query', required: false, schema: { type: 'integer', minimum: 1 } }],
+        responses: {
+          200: json({ type: 'object', properties: { cards: { type: 'array', items: ref('DueCard') } } }, 'Due cards'),
+          400: json(ref('Error'), 'Invalid deckId (`VALIDATION_ERROR`)'),
+          401: errors.unauthorized,
+        },
+      },
+    },
+    '/review/{cardId}': {
+      post: {
+        tags: ['Review'],
+        summary: 'Grade a card',
+        description:
+          'Grades: 0 Again, 1 Hard, 2 Good, 3 Easy. Updates the card with SM-2 and records the review in one transaction.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'cardId', in: 'path', required: true, schema: { type: 'integer', minimum: 1 } }],
+        requestBody: body(reviewSchema, { grade: 2 }),
+        responses: {
+          200: json(
+            {
+              type: 'object',
+              properties: {
+                nextDue: { type: 'string', format: 'date', example: '2026-10-12', description: 'Date the card is due next (Europe/Prague)' },
+                interval: { type: 'integer', example: 3, description: 'Days until the next review' },
+              },
+            },
+            'Review saved',
+          ),
+          400: json(ref('Error'), 'Invalid grade or card id (`VALIDATION_ERROR`)'),
+          401: errors.unauthorized,
+          404: json(ref('Error'), "Card doesn't exist or belongs to another user (`NOT_FOUND`)"),
+        },
+      },
+    },
+    '/quiz/{deckId}': {
+      post: {
+        tags: ['Quiz'],
+        summary: 'Generate a quiz for a deck',
+        description:
+          'Builds up to 8 multiple-choice questions from the 8 weakest cards (most lapses, lowest ease) ' +
+          'plus up to 4 random others. Difficulty adapts to the average score of the last 3 attempts on this deck: ' +
+          'none → medium, below 50% → easy, 50-80% → medium, above 80% → hard. ' +
+          'Correct answers are stored on the server and never sent to the app. Limit: 30 per hour per user.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'deckId', in: 'path', required: true, schema: { type: 'integer', minimum: 1 } }],
+        responses: {
+          201: json(
+            {
+              type: 'object',
+              properties: {
+                quizId: { type: 'integer', example: 12 },
+                difficulty: { type: 'string', enum: ['easy', 'medium', 'hard'], example: 'medium' },
+                questions: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      question: { type: 'string', example: 'What do mitochondria produce?' },
+                      options: {
+                        type: 'array',
+                        minItems: 4,
+                        maxItems: 4,
+                        items: { type: 'string' },
+                        example: ['Glucose', 'ATP', 'Oxygen', 'DNA'],
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            'Quiz created',
+          ),
+          400: json(ref('Error'), 'Invalid deck id (`VALIDATION_ERROR`)'),
+          401: errors.unauthorized,
+          404: errors.deckNotFound,
+          422: json(ref('Error'), 'Deck has fewer than 4 cards (`NOT_ENOUGH_CARDS`)'),
+          429: errors.rateLimited,
+          502: json(ref('Error'), 'The AI service failed (`GENERATION_FAILED`), try again'),
+        },
+      },
+    },
+    '/quiz/{quizId}/submit': {
+      post: {
+        tags: ['Quiz'],
+        summary: 'Submit answers and get the results',
+        description:
+          'Send one chosen option index (0-3) per question, in order. Saves the attempt (once per quiz) and returns ' +
+          'the score, the previous score on this deck (`previousPercent`, null on the first attempt) and a review of every question. ' +
+          'Cards behind wrong answers become due today, so they appear in Review again (`cardsToReview`).',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'quizId', in: 'path', required: true, schema: { type: 'integer', minimum: 1 } }],
+        requestBody: body(submitQuizSchema, { answers: [1, 3, 0, 2, 1, 1, 0, 2] }),
+        responses: {
+          200: json(
+            {
+              type: 'object',
+              properties: {
+                score: { type: 'integer', example: 6 },
+                total: { type: 'integer', example: 8 },
+                previousPercent: { type: ['integer', 'null'], example: 60 },
+                cardsToReview: { type: 'integer', example: 2, description: 'Cards moved back into today\'s Review' },
+                results: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      question: { type: 'string' },
+                      options: { type: 'array', items: { type: 'string' } },
+                      chosen: { type: 'integer', example: 1 },
+                      correct: { type: 'integer', example: 1 },
+                      isCorrect: { type: 'boolean', example: true },
+                      explanation: { type: 'string' },
+                    },
+                  },
+                },
+              },
+            },
+            'Results',
+          ),
+          400: json(ref('Error'), 'Invalid quiz id, or answers not one 0-3 index per question (`VALIDATION_ERROR`)'),
+          401: errors.unauthorized,
+          404: json(ref('Error'), "Quiz doesn't exist or its deck belongs to another user (`NOT_FOUND`)"),
+          409: json(ref('Error'), 'This quiz was already submitted (`ALREADY_SUBMITTED`)'),
+        },
+      },
+    },
+    '/cards/{id}/explain': {
+      post: {
+        tags: ['Cards'],
+        summary: 'Explain this simply',
+        description:
+          'A short, simple explanation of the card plus one example or analogy. The AI may add general background ' +
+          'but never contradicts the card. The result is cached on the card: later calls return it instantly ' +
+          '(`cached: true`) until the card is edited. Limit: 60 per hour per user.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer', minimum: 1 } }],
+        responses: {
+          200: json(
+            {
+              type: 'object',
+              properties: {
+                explanation: { type: 'string', example: 'Ribosomes are the parts of a cell that build proteins...' },
+                example: { type: 'string', example: 'Think of a ribosome as a kitchen following a recipe...' },
+                cached: { type: 'boolean', example: false },
+              },
+            },
+            'Explanation',
+          ),
+          400: json(ref('Error'), 'Invalid card id (`VALIDATION_ERROR`)'),
+          401: errors.unauthorized,
+          404: json(ref('Error'), "Card doesn't exist or belongs to another user (`NOT_FOUND`)"),
+          429: errors.rateLimited,
+          502: json(ref('Error'), 'The AI service failed or returned an incomplete answer (`GENERATION_FAILED`)'),
+        },
+      },
+    },
+    '/cards/{id}': {
+      put: {
+        tags: ['Cards'],
+        summary: 'Edit a card',
+        description: 'Updates front and/or back. Clears the cached explanation, since it no longer matches.',
+        security: [{ bearerAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer', minimum: 1 } }],
+        requestBody: body(updateCardSchema, { front: 'What do ribosomes make?', back: 'Proteins' }),
+        responses: {
+          200: json(
+            {
+              type: 'object',
+              properties: {
+                card: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'integer' },
+                    deck_id: { type: 'integer' },
+                    front: { type: 'string' },
+                    back: { type: 'string' },
+                  },
+                },
+              },
+            },
+            'Updated card',
+          ),
+          400: errors.validation,
+          401: errors.unauthorized,
+          404: json(ref('Error'), "Card doesn't exist or belongs to another user (`NOT_FOUND`)"),
         },
       },
     },

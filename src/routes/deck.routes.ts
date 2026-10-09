@@ -27,7 +27,7 @@ router.get('/', async (req, res) => {
 });
 
 router.get('/:id', async (req, res) => {
-  res.json({ deck: await decks.getDeck(req.userId!, deckId(req)) });
+  res.json(await decks.getDeck(req.userId!, deckId(req)));
 });
 
 router.delete('/:id', async (req, res) => {

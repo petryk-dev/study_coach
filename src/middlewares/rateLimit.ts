@@ -25,6 +25,14 @@ export const emailLimiter = limiter(15, 5);
 export const codeCheckLimiter = limiter(15, 20);
 
 // Deck generation calls Groq many times, so limit it per user (runs after requireAuth)
-export const generateLimiter = limiter(60, 20, {
+const byUser: Partial<Options> = {
   keyGenerator: (req) => (req.userId ? `user:${req.userId}` : ipKeyGenerator(req.ip ?? '')),
-});
+};
+
+export const generateLimiter = limiter(60, 20, byUser);
+
+// Quiz generation is one Groq call, so it gets a higher per-user limit
+export const quizLimiter = limiter(60, 30, byUser);
+
+// Explanations are cached per card, so this mostly limits fresh AI calls
+export const explainLimiter = limiter(60, 60, byUser);
