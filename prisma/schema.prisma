@@ -35,6 +35,8 @@ model email_codes {
   id         Int       @id @default(autoincrement())
   user_id    Int
   code_hash  String
+  // "verify_email" or "reset_password"
+  purpose    String    @default("verify_email")
   expires_at DateTime  @db.Timestamptz(6)
   attempts   Int?      @default(0)
   created_at DateTime? @default(now()) @db.Timestamptz(6)
@@ -42,13 +44,25 @@ model email_codes {
 }
 
 model users {
-  id             Int           @id @default(autoincrement())
-  email          String        @unique
+  id             Int              @id @default(autoincrement())
+  email          String           @unique
   password_hash  String
   push_token     String?
-  created_at     DateTime?     @default(now()) @db.Timestamptz(6)
+  created_at     DateTime?        @default(now()) @db.Timestamptz(6)
   name           String?
-  email_verified Boolean?      @default(false)
+  email_verified Boolean?         @default(false)
   decks          decks[]
   email_codes    email_codes[]
+  refresh_tokens refresh_tokens[]
+}
+
+model refresh_tokens {
+  id         Int       @id @default(autoincrement())
+  user_id    Int
+  token_hash String    @unique
+  expires_at DateTime  @db.Timestamptz(6)
+  created_at DateTime? @default(now()) @db.Timestamptz(6)
+  users      users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([user_id])
 }
