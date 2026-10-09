@@ -1,7 +1,8 @@
-const { log } = require('../utils/logger');
+import type { Request, Response, NextFunction } from 'express';
+import { log } from '../utils/logger';
 
 // Logs each incoming request and, once finished, its status and duration.
-function requestLogger(req, res, next) {
+export function requestLogger(req: Request, res: Response, next: NextFunction): void {
   const start = Date.now();
 
   log(`--> ${req.method} ${req.originalUrl}`);
@@ -14,5 +15,3 @@ function requestLogger(req, res, next) {
 
   next();
 }
-
-module.exports = requestLogger;

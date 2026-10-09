@@ -1,15 +1,31 @@
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const DEFAULT_MODEL = process.env.GROQ_MODEL || 'openai/gpt-oss-120b';
 
+export interface ChatJSONOptions {
+  system?: string;
+  user: string;
+  model?: string;
+  temperature?: number;
+}
+
+interface GroqChatResponse {
+  choices?: { message?: { content?: string } }[];
+}
+
 /**
  * Sends a chat request to Groq in JSON mode and returns the parsed object.
  * Note: JSON mode requires the word "JSON" to appear in the prompt.
  */
-async function chatJSON({ system, user, model = DEFAULT_MODEL, temperature = 0.3 }) {
+export async function chatJSON<T = unknown>({
+  system,
+  user,
+  model = DEFAULT_MODEL,
+  temperature = 0.3,
+}: ChatJSONOptions): Promise<T> {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error('GROQ_API_KEY is not set');
 
-  const messages = [];
+  const messages: { role: 'system' | 'user'; content: string }[] = [];
   if (system) messages.push({ role: 'system', content: system });
   messages.push({ role: 'user', content: user });
 
@@ -32,15 +48,13 @@ async function chatJSON({ system, user, model = DEFAULT_MODEL, temperature = 0.3
     throw new Error(`Groq API error ${res.status}: ${body}`);
   }
 
-  const data = await res.json();
+  const data = (await res.json()) as GroqChatResponse;
   const content = data.choices?.[0]?.message?.content;
   if (!content) throw new Error('Groq returned an empty response');
 
   try {
-    return JSON.parse(content);
+    return JSON.parse(content) as T;
   } catch {
     throw new Error(`Groq returned invalid JSON: ${content}`);
   }
 }
-
-module.exports = { chatJSON };
