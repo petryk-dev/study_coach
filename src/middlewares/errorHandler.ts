@@ -1,4 +1,5 @@
 import type { Request, Response, NextFunction } from 'express';
+import { MulterError } from 'multer';
 import { HttpError } from '../utils/httpError';
 import { logError } from '../utils/logger';
 
@@ -9,6 +10,16 @@ export function errorHandler(
   res: Response,
   _next: NextFunction,
 ): void {
+  // Multer's own errors (file too large, wrong field name...) carry no HTTP status
+  if (err instanceof MulterError) {
+    const tooLarge = err.code === 'LIMIT_FILE_SIZE';
+    res.status(tooLarge ? 413 : 400).json({
+      error: tooLarge ? 'File is too large (max 10 MB)' : `Upload error: ${err.message}. Send the PDF in a field named "file"`,
+      code: tooLarge ? 'FILE_TOO_LARGE' : 'UPLOAD_ERROR',
+    });
+    return;
+  }
+
   const status = err.status || 500;
 
   if (status >= 500) logError(`!!! ${req.method} ${req.originalUrl}`, err.stack || err);

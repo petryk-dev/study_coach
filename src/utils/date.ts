@@ -27,3 +27,33 @@ export function addDays(date: Date, days: number): Date {
 export function toDateString(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
+
+const partsFormatter = new Intl.DateTimeFormat('en-US', {
+  timeZone: APP_TIMEZONE,
+  hourCycle: 'h23',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+});
+
+// How far APP_TIMEZONE is ahead of UTC at a given moment, in ms (e.g. +2h in Prague summer).
+function tzOffsetMs(at: Date): number {
+  const p = Object.fromEntries(partsFormatter.formatToParts(at).map((x) => [x.type, x.value]));
+  const asUtc = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second);
+  return asUtc - Math.floor(at.getTime() / 1000) * 1000;
+}
+
+/**
+ * The exact moment today began in APP_TIMEZONE, for comparing timestamp columns
+ * (reviews.reviewed_at, quiz_attempts.created_at). In Prague: 22:00 or 23:00 UTC the day before.
+ */
+export function startOfTodayInAppTz(now = new Date()): Date {
+  const midnightAsUtc = todayInAppTz(now).getTime();
+  let start = midnightAsUtc - tzOffsetMs(new Date(midnightAsUtc));
+  // On daylight saving days the offset at midnight can differ from the first guess
+  start = midnightAsUtc - tzOffsetMs(new Date(start));
+  return new Date(start);
+}

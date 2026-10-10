@@ -106,6 +106,14 @@ export async function createQuiz(userId: number, deckId: number) {
   };
 }
 
+/** Quizzes generated but never submitted within 24 hours: nobody is coming back to them. */
+export async function deleteAbandonedQuizzes(now = new Date()): Promise<number> {
+  const { count } = await prisma.quizzes.deleteMany({
+    where: { created_at: { lt: new Date(now.getTime() - 24 * 60 * 60 * 1000) }, quiz_attempts: { none: {} } },
+  });
+  return count;
+}
+
 /**
  * Checks the answers, saves the attempt, and returns the full review.
  * Cards behind wrong answers become due today, so they show up in Review again.

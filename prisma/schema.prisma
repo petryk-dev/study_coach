@@ -61,6 +61,7 @@ model users {
   refresh_tokens refresh_tokens[]
   reviews        reviews[]
   quiz_attempts  quiz_attempts[]
+  plans          plans[]
 }
 
 model refresh_tokens {
@@ -76,11 +77,12 @@ model refresh_tokens {
 
 model reviews {
   id          Int      @id @default(autoincrement())
-  card_id     Int
+  // Null once the card is deleted: the review stays, so streaks and history survive
+  card_id     Int?
   user_id     Int
   grade       Int
   reviewed_at DateTime @default(now()) @db.Timestamptz(6)
-  cards       cards    @relation(fields: [card_id], references: [id], onDelete: Cascade)
+  cards       cards?   @relation(fields: [card_id], references: [id], onDelete: SetNull)
   users       users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@index([user_id, reviewed_at])
@@ -98,12 +100,26 @@ model quizzes {
 
 model quiz_attempts {
   id         Int      @id @default(autoincrement())
-  quiz_id    Int
+  // Null once the quiz (or its deck) is deleted: the attempt stays for streaks and history
+  quiz_id    Int?
   user_id    Int
   score      Int
   total      Int
   answers    Json // what the user chose
   created_at DateTime @default(now()) @db.Timestamptz(6)
-  quizzes    quizzes  @relation(fields: [quiz_id], references: [id], onDelete: Cascade)
+  quizzes    quizzes? @relation(fields: [quiz_id], references: [id], onDelete: SetNull)
   users      users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+}
+
+model plans {
+  id         Int      @id @default(autoincrement())
+  user_id    Int
+  date       DateTime @db.Date
+  tasks      Json // [{ type, deckId, deckTitle, target }]
+  headline   String
+  tip        String?
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  users      users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, date]) // one plan per user per day
 }

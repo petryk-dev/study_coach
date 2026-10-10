@@ -56,7 +56,7 @@ export const openApiSpec = {
       'Each refresh token works once; reusing one logs out every session of that user.',
   },
   servers: [{ url: '/', description: 'This server' }],
-  tags: [{ name: 'Health' }, { name: 'Auth' }, { name: 'Password reset' }, { name: 'Decks', description: 'Flashcard decks generated from notes. All routes need a Bearer token.' }, { name: 'Review', description: 'Spaced repetition (SM-2). All routes need a Bearer token.' }, { name: 'Quiz', description: 'Multiple-choice quizzes generated from a deck. All routes need a Bearer token.' }, { name: 'Cards', description: 'Single-card actions. All routes need a Bearer token.' }],
+  tags: [{ name: 'Health' }, { name: 'Auth' }, { name: 'Password reset' }, { name: 'Decks', description: 'Flashcard decks generated from notes. All routes need a Bearer token.' }, { name: 'Review', description: 'Spaced repetition (SM-2). All routes need a Bearer token.' }, { name: 'Quiz', description: 'Multiple-choice quizzes generated from a deck. All routes need a Bearer token.' }, { name: 'Cards', description: 'Single-card actions. All routes need a Bearer token.' }, { name: 'Plan', description: "Today's plan on the Home screen. Needs a Bearer token." }, { name: 'Me', description: 'Settings for the logged-in user. Needs a Bearer token.' }],
   components: {
     securitySchemes: {
       bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
@@ -305,20 +305,46 @@ export const openApiSpec = {
         summary: 'Generate a deck from notes',
         description:
           'Generates flashcards and a summary from the notes using only facts in them, then saves the deck. ' +
-          `Takes a few seconds (longer for long notes). Notes: 50 to ${NOTES_MAX_CHARS.toLocaleString('en')} characters. ` +
-          'If no title is given, the first line of the notes is used. Limit: 20 per hour per user.',
+          `Takes a few seconds (longer for long notes). Notes or PDF text: 50 to ${NOTES_MAX_CHARS.toLocaleString('en')} characters. ` +
+          'If no title is given, the first line of the notes is used. Limit: 20 per hour per user. ' +
+          'Send either JSON `{ title?, text }` or multipart form-data with a PDF in `file` (max 10 MB, text-based; ' +
+          'scanned PDFs are not supported) and an optional `title` (defaults to the file name). The PDF is read in memory and not stored.',
         security: [{ bearerAuth: [] }],
-        requestBody: body(createDeckSchema, {
-          title: 'Photosynthesis',
-          text:
-            'Photosynthesis is the process by which green plants use sunlight, water, and carbon dioxide to produce ' +
-            'glucose and oxygen. It takes place mainly in the chloroplasts, which contain the pigment chlorophyll.',
-        }),
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': body(createDeckSchema, {
+              title: 'Photosynthesis',
+              text:
+                'Photosynthesis is the process by which green plants use sunlight, water, and carbon dioxide to produce ' +
+                'glucose and oxygen. It takes place mainly in the chloroplasts, which contain the pigment chlorophyll.',
+            }).content['application/json'],
+            'multipart/form-data': {
+              schema: {
+                type: 'object',
+                required: ['file'],
+                properties: {
+                  file: { type: 'string', format: 'binary', description: 'PDF with selectable text, max 10 MB' },
+                  title: { type: 'string', maxLength: 120, description: 'Optional; defaults to the file name' },
+                },
+              },
+            },
+          },
+        },
         responses: {
           201: json({ type: 'object', properties: { deck: ref('Deck') } }, 'Deck created with its cards'),
-          400: errors.validation,
+          400: json(
+            ref('Error'),
+            'Validation failed (`VALIDATION_ERROR`, e.g. PDF text over the limit), not a PDF (`INVALID_FILE_TYPE`, `INVALID_PDF`), ' +
+              'password-protected (`PDF_PASSWORD_PROTECTED`) or wrong form field (`UPLOAD_ERROR`)',
+          ),
+          413: json(ref('Error'), 'PDF larger than 10 MB (`FILE_TOO_LARGE`)'),
           401: errors.unauthorized,
-          422: json(ref('Error'), 'No cards could be made from the notes (`NO_CARDS`)'),
+          422: json(
+            ref('Error'),
+            'No cards could be made from the notes (`NO_CARDS`), no text found in the PDF (`NO_TEXT_IN_PDF`), ' +
+              'or the PDF has fewer than 50 characters of text (`PDF_TEXT_TOO_SHORT`)',
+          ),
           429: errors.rateLimited,
           502: json(ref('Error'), 'The AI service failed (`GENERATION_FAILED`), try again'),
         },
@@ -555,6 +581,90 @@ export const openApiSpec = {
           401: errors.unauthorized,
           404: json(ref('Error'), "Card doesn't exist or belongs to another user (`NOT_FOUND`)"),
         },
+      },
+    },
+    '/plan/today': {
+      get: {
+        tags: ['Plan'],
+        summary: "Today's plan",
+        description:
+          'The first call of the day builds the plan and saves it: review tasks for decks with due cards ' +
+          '(at most 30 cards in total, most due first) and one quiz on the deck with the weakest last score. ' +
+          'Code decides the tasks; the AI only writes `headline` and `tip` (template fallback if it fails). ' +
+          'With nothing due, `tasks` is empty and the headline says so. Later calls return the same plan. ' +
+          '`done`, `completed`, `progress` and `streak` are calculated live on every call. "Today" is Europe/Prague.',
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: json(
+            {
+              type: 'object',
+              properties: {
+                date: { type: 'string', format: 'date', example: '2026-10-10' },
+                headline: { type: 'string', example: 'Review 24 cards and take one quiz' },
+                tip: { type: ['string', 'null'], example: "Start with Cell Biology while you're fresh." },
+                tasks: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      type: { type: 'string', enum: ['review', 'quiz'] },
+                      deckId: { type: 'integer', example: 3 },
+                      deckTitle: { type: 'string', example: 'Cell Biology' },
+                      target: { type: 'integer', example: 12, description: 'Cards to review, or 1 for a quiz' },
+                      done: { type: 'integer', example: 4, description: 'Reviews today in this deck, or 1 if quizzed today' },
+                      completed: { type: 'boolean', example: false },
+                    },
+                  },
+                },
+                progress: {
+                  type: 'number',
+                  minimum: 0,
+                  maximum: 1,
+                  example: 0.64,
+                  description: 'For the progress bar: total done ÷ total target, each task capped at its target. 1 with no tasks',
+                },
+                streak: {
+                  type: 'integer',
+                  example: 6,
+                  description: 'Consecutive days with a review or quiz; still counts until the end of today if not studied yet today',
+                },
+              },
+            },
+            "Today's plan",
+          ),
+          401: errors.unauthorized,
+        },
+      },
+    },
+    '/me/push-token': {
+      post: {
+        tags: ['Me'],
+        summary: 'Save this device\'s push token',
+        description:
+          'Saves the Expo push token for the daily 07:00 plan notification. The token is removed from any other ' +
+          'account first, so a phone shared by two accounts only notifies the one logged in.',
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { type: 'object', required: ['token'], properties: { token: { type: 'string' } } },
+              example: { token: 'ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]' },
+            },
+          },
+        },
+        responses: {
+          204: { description: 'Saved' },
+          400: json(ref('Error'), 'Not a valid Expo push token (`INVALID_PUSH_TOKEN`)'),
+          401: errors.unauthorized,
+        },
+      },
+      delete: {
+        tags: ['Me'],
+        summary: 'Clear the push token',
+        description: 'Stops notifications for this account. The app calls this on logout.',
+        security: [{ bearerAuth: [] }],
+        responses: { 204: { description: 'Cleared' }, 401: errors.unauthorized },
       },
     },
   },

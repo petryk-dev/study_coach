@@ -2,6 +2,8 @@ import { Router, type Request } from 'express';
 import { validate } from '../middlewares/validate';
 import { requireAuth } from '../middlewares/requireAuth';
 import { generateLimiter } from '../middlewares/rateLimit';
+import { uploadPdf } from '../middlewares/upload';
+import { pdfToText } from '../middlewares/pdfToText';
 import { createDeckSchema, deckIdSchema } from '../schemas/deck.schema';
 import * as decks from '../services/deck.service';
 import { HttpError } from '../utils/httpError';
@@ -17,8 +19,10 @@ function deckId(req: Request): number {
   return result.data.id;
 }
 
-// Generate cards + summary from notes and save them as a deck (takes a few seconds)
-router.post('/', generateLimiter, validate(createDeckSchema), async (req, res) => {
+// Generate cards + summary from notes and save them as a deck (takes a few seconds).
+// Accepts JSON { title?, text } or multipart form-data with "file" (PDF) and optional "title".
+// uploadPdf only acts on multipart requests; JSON bodies pass through untouched.
+router.post('/', generateLimiter, uploadPdf, pdfToText, validate(createDeckSchema), async (req, res) => {
   res.status(201).json({ deck: await decks.createDeck(req.userId!, req.body) });
 });
 
