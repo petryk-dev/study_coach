@@ -11,6 +11,3 @@ dist/
 
 # OS / editor
 .DS_Store
-
-# temporary (monorepo migration)
-/.orig_*/
