@@ -23,11 +23,21 @@ npx expo install --fix      # fix incompatible package versions
 
 Run lint and typecheck before declaring any task done.
 
-## Navigation & Routing
+## Navigation & Project Structure
 
-- Use **Expo Router** for all navigation. Routes live in `src/app/` — every file there is a screen, `_layout.tsx` files define navigators. Keep non-route code (components, hooks, utils) outside `src/app/`.
-- Import `Link`, `router`, and `useLocalSearchParams` from `expo-router`.
-- Docs: https://docs.expo.dev/router/introduction.md
+- This project does NOT use Expo Router. Entry is `index.ts` -> `App.tsx` (root), classic React Native style.
+- Source lives in `src/`: `api/`, `hooks/`, `components/`, `screens/`, `navigation/`, `utils/`, `constants/`, `images/`.
+- Navigation uses React Navigation native stack (`src/navigation/RootNavigator.tsx`).
+- Do not create `app/` or `src/app/` route folders.
+
+## API
+
+- Backend: `../study_coach_backend` (Express). Its OpenAPI spec is served at `/docs`.
+- Two layers, keep them separate:
+  - `src/api/` — no React. `client.ts` is the single axios instance (adds the Bearer token except on public `/auth/*` routes, refreshes once on 401). Each `<resource>.ts` has request functions plus pure data logic (filters, sorting, formatting). Never call axios or fetch from anywhere else.
+  - `src/hooks/` — React Query hooks only. They call `src/api` functions, take `MutationProps`/`QueryProps` (e.g. `onSuccess`, `onError`, `filters`) from screens, and handle cache invalidation. Query keys live in `src/hooks/queryKeys.ts`.
+- Screens use hooks for data and may import pure helpers from `src/api` (e.g. `getErrorMessage`).
+- Base URL comes from `EXPO_PUBLIC_API_URL` (see `.env.example`).
 
 ## Building with EAS
 

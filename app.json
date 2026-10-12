@@ -20,6 +20,17 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-font",
+      "expo-notifications"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "c3d5c8b2-5d42-477f-bbfc-ad8afbf2ed1d"
+      }
+    },
+    "owner": "intromaven"
   }
 }
