@@ -1,0 +1,125 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model cards {
+  id                  Int       @id @default(autoincrement())
+  deck_id             Int
+  front               String
+  back                String
+  ease                Float?    @default(2.5) @db.Real
+  interval            Int?      @default(0)
+  repetitions         Int?      @default(0)
+  lapses              Int?      @default(0)
+  due_date            DateTime? @default(dbgenerated("CURRENT_DATE")) @db.Date
+  created_at          DateTime? @default(now()) @db.Timestamptz(6)
+  // Cached "Explain this simply" result; cleared when the card is edited
+  explanation         String?
+  explanation_example String?
+  decks               decks     @relation(fields: [deck_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  reviews             reviews[]
+}
+
+model decks {
+  id          Int       @id @default(autoincrement())
+  user_id     Int
+  title       String
+  source_text String?
+  summary     String?
+  created_at  DateTime? @default(now()) @db.Timestamptz(6)
+  cards       cards[]
+  users       users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  quizzes     quizzes[]
+}
+
+model email_codes {
+  id         Int       @id @default(autoincrement())
+  user_id    Int
+  code_hash  String
+  // "verify_email" or "reset_password"
+  purpose    String    @default("verify_email")
+  expires_at DateTime  @db.Timestamptz(6)
+  attempts   Int?      @default(0)
+  created_at DateTime? @default(now()) @db.Timestamptz(6)
+  users      users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model users {
+  id             Int              @id @default(autoincrement())
+  email          String           @unique
+  password_hash  String
+  push_token     String?
+  created_at     DateTime?        @default(now()) @db.Timestamptz(6)
+  name           String?
+  email_verified Boolean?         @default(false)
+  decks          decks[]
+  email_codes    email_codes[]
+  refresh_tokens refresh_tokens[]
+  reviews        reviews[]
+  quiz_attempts  quiz_attempts[]
+  plans          plans[]
+}
+
+model refresh_tokens {
+  id         Int       @id @default(autoincrement())
+  user_id    Int
+  token_hash String    @unique
+  expires_at DateTime  @db.Timestamptz(6)
+  created_at DateTime? @default(now()) @db.Timestamptz(6)
+  users      users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([user_id])
+}
+
+model reviews {
+  id          Int      @id @default(autoincrement())
+  // Null once the card is deleted: the review stays, so streaks and history survive
+  card_id     Int?
+  user_id     Int
+  grade       Int
+  reviewed_at DateTime @default(now()) @db.Timestamptz(6)
+  cards       cards?   @relation(fields: [card_id], references: [id], onDelete: SetNull)
+  users       users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id, reviewed_at])
+}
+
+model quizzes {
+  id            Int             @id @default(autoincrement())
+  deck_id       Int
+  difficulty    String // "easy" | "medium" | "hard"
+  questions     Json // the full questions, including correct answers
+  created_at    DateTime        @default(now()) @db.Timestamptz(6)
+  decks         decks           @relation(fields: [deck_id], references: [id], onDelete: Cascade)
+  quiz_attempts quiz_attempts[]
+}
+
+model quiz_attempts {
+  id         Int      @id @default(autoincrement())
+  // Null once the quiz (or its deck) is deleted: the attempt stays for streaks and history
+  quiz_id    Int?
+  user_id    Int
+  score      Int
+  total      Int
+  answers    Json // what the user chose
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  quizzes    quizzes? @relation(fields: [quiz_id], references: [id], onDelete: SetNull)
+  users      users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+}
+
+model plans {
+  id         Int      @id @default(autoincrement())
+  user_id    Int
+  date       DateTime @db.Date
+  tasks      Json // [{ type, deckId, deckTitle, target }]
+  headline   String
+  tip        String?
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  users      users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, date]) // one plan per user per day
+}
